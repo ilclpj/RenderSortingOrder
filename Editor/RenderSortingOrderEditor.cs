@@ -1,15 +1,8 @@
-// Author: Zhujiamin
-// Email: ilclpj@163.com
-// QQ: 233423144
-// Time: 2021-07-15 14:10
-// Description:
-
-using System;
-using ilclpj.Components;
+using LF.Components;
 using UnityEditor;
 using UnityEngine;
 
-namespace ilclpj.Editor
+namespace LF.LFEditor
 {
     [CustomEditor(typeof(RenderSortingOrder))]
     public class RenderSortingOrderEditor : Editor
@@ -66,7 +59,7 @@ namespace ilclpj.Editor
             if (Application.isPlaying && _ModifyProperty(m_BaseOrder))
             {
                 var component = (RenderSortingOrder) target;
-                component.SetBaseOrder(component.baseOrder, false);
+                component.SetBaseOrder(component.baseOrder);
                 component.RefreshAllOrder();
                 return;
             }

@@ -1,13 +1,10 @@
-﻿// Author: Zhujiamin
-// Email: ilclpj@163.com
-// QQ: 233423144
-// Time: 2021-07-15 14:10
-// Description:
-
+﻿using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace ilclpj.Components
+namespace LF.Components
 {
     public class RenderSortingOrder : MonoBehaviour
     {
@@ -23,92 +20,137 @@ namespace ilclpj.Components
         /// <summary>
         /// 覆盖父节点指定的baseOrder
         /// </summary>
-        [Header("覆盖父节点指定的baseOrder")]
-        [Tooltip("设置后的baseOrder由以下决定:\n1.添加组件时的sorting\n2.代码设置")]
-        public bool overrideSorting;
+        [Header("父节刷新order时忽略本节点和所有子节点")]
+        public bool overrideSorting = true;
 
-        private void Awake()
+        private bool m_HasInit;
+        private Canvas m_Canvas;
+        private Renderer m_Renderer;
+
+        public void AddInitComponents()
         {
-            var render = GetComponent<Renderer>();
-            if (null != render)
+            if (m_HasInit) return;
+            m_HasInit = true;
+
+            m_Renderer = GetComponent<Renderer>();
+            if (null == m_Renderer)
             {
-                curOrder = render.sortingOrder;
-            }
-            else
-            {
-                var canvas = gameObject.GetComponent<Canvas>();
-                if (null == canvas)
+                m_Canvas = gameObject.GetComponent<Canvas>();
+                if (null == m_Canvas)
                 {
-                    canvas = gameObject.AddComponent<Canvas>();
+                    m_Canvas = gameObject.AddComponent<Canvas>();
                     gameObject.AddComponent<GraphicRaycaster>();
+
+                    m_Canvas.overrideSorting = true;
                 }
-
-                canvas.overrideSorting = true;
-
-                curOrder = canvas.sortingOrder;
             }
-
-            baseOrder = curOrder;
         }
 
-        private void _SetOrder(Component trans, int order)
+        public void SetSelfOrder()
         {
-            var render = trans.GetComponent<Renderer>();
-            if (null != render)
+            if (m_Renderer == null)
+                m_Renderer = GetComponent<Renderer>();
+
+            if (m_Renderer != null)
             {
-                render.sortingOrder = order;
+                m_Renderer.sortingOrder = curOrder;
                 return;
             }
 
-            var canvas = trans.GetComponent<Canvas>();
-            if (null == canvas) return;
+            if (m_Canvas == null)
+                m_Canvas = GetComponent<Canvas>();
 
-            canvas.overrideSorting = true;
-            canvas.sortingOrder = order;
-        }
-
-        private void _SetAllChildrenOrder(Transform trans, int order)
-        {
-            for (var i = 0; i < trans.childCount; i++)
+            if (m_Canvas != null)
             {
-                var child = trans.GetChild(i);
-                var renderSortingOrder = child.GetComponent<RenderSortingOrder>();
-                if (null != renderSortingOrder)
-                {
-                    if (!renderSortingOrder.overrideSorting)
-                    {
-                        renderSortingOrder.SetBaseOrder(order);
-                    }
-
-                    renderSortingOrder.RefreshAllOrder();
-
-                    continue;
-                }
-
-                _SetOrder(child, order);
-                _SetAllChildrenOrder(child, order);
+                m_Canvas.overrideSorting = true;
+                m_Canvas.sortingOrder = curOrder;
             }
         }
 
-        public void SetBaseOrder(int order, bool autoRefresh = true)
+        public void SetBaseOrder(int order, bool refresh = false)
         {
             baseOrder = order;
-
-            if (autoRefresh)
-                RefreshOrder();
-        }
-
-        public void RefreshOrder()
-        {
             curOrder = baseOrder + orderDelta;
-            _SetOrder(transform, curOrder);
+
+            if (refresh)
+            {
+                if (!m_HasInit)
+                    AddInitComponents();
+
+                SetSelfOrder();
+            }
         }
+
+        // 查找和缓存自身所有的canvas和renderer和renderSortingOrder
+        // 缓存后加速索引
+        private void _FindAllComponents(out Dictionary<Transform, Canvas> allCanvas, out Dictionary<Transform, Renderer> allRenderer, out Dictionary<Transform, RenderSortingOrder> allRendererSortingOrder)
+        {
+            allCanvas = transform.GetComponentsInChildren<Canvas>(true).ToDictionary(component => component.transform);
+            allRenderer = transform.GetComponentsInChildren<Renderer>(true).ToDictionary(component => component.transform);
+            allRendererSortingOrder = transform.GetComponentsInChildren<RenderSortingOrder>(true).ToDictionary(component => component.transform);
+        }
+
+        private int _SetNodeOrder(int order, Transform trans, IDictionary<Transform, Canvas> allCanvas,
+            IDictionary<Transform, Renderer> allRenderer, IDictionary<Transform, RenderSortingOrder> allRenderSortingOrder)
+        {
+            RenderSortingOrder renderSortingOrder;
+            var exist = allRenderSortingOrder.TryGetValue(trans, out renderSortingOrder);
+            if (exist)
+            {
+                // 如果overrideSorting为false才使用新的order来更新, 否则使用自身已存在的order
+                renderSortingOrder.SetBaseOrder(renderSortingOrder.overrideSorting ? renderSortingOrder.baseOrder : order);
+                order = renderSortingOrder.curOrder;
+            }
+
+            Renderer render;
+            exist = allRenderer.TryGetValue(trans, out render);
+            if (exist)
+            {
+                render.sortingOrder = order;
+                return order;
+            }
+
+            Canvas canvas;
+            exist = allCanvas.TryGetValue(trans, out canvas);
+            if (!exist) return order;
+
+            canvas.overrideSorting = true;
+            canvas.sortingOrder = order;
+
+            return order;
+        }
+
 
         [ContextMenu("设置所有子节点的SoringOrder(与自己保持一致)")]
         public void RefreshAllOrder()
         {
-            RefreshOrder();
-            _SetAllChildrenOrder(transform, curOrder);
+            //--------------------------------------------------------------------
+            Dictionary<Transform, Canvas> allCanvas;
+            Dictionary<Transform, Renderer> allRenderer;
+            Dictionary<Transform, RenderSortingOrder> allRendererSortingOrder;
+            _FindAllComponents(out allCanvas, out allRenderer, out allRendererSortingOrder);
+            //--------------------------------------------------------------------
+
+            var queue = new Queue<KeyValuePair<int, Transform>>();
+            // var node = new Node(curOrder, transform);
+            var node = new KeyValuePair<int, Transform>(curOrder, transform);
+            queue.Enqueue(node);
+
+            while (queue.Count > 0)
+            {
+                var cur = queue.Dequeue();
+                var order = cur.Key;
+
+                for (var i = cur.Value.childCount - 1; i >= 0; i--)
+                {
+                    var child = cur.Value.GetChild(i);
+                    var newOrder = _SetNodeOrder(order, child, allCanvas, allRenderer, allRendererSortingOrder);
+                    if (child.childCount <= 0) continue;
+
+                    var childNode = new KeyValuePair<int, Transform>(newOrder, child);
+                    queue.Enqueue(childNode);
+                }
+            }
         }
     }
 }
